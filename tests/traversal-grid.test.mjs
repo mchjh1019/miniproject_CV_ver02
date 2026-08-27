@@ -14,6 +14,25 @@ function floorPatch(grid, x0, x1, z0, z1, y = 0.02, step = 0.05) {
   }
 }
 
+// Legs, so a fixture desk is a desk and not a plate hovering in mid-air.
+// hasSupportColumn cannot tell those apart by shape, and neither can the
+// depth camera: a legless tabletop IS what reconstruction noise looks like.
+// Each leg is a 2x2 voxel column, not a single line of points: a slab needs
+// minSlabVoxels distinct voxels before it counts as solid, and the fixtures
+// that leave that at its shipped default would otherwise grow legs made of
+// evidence too thin to believe.
+function legs(grid, x0, x1, z0, z1, topY, floorY = 0.02, step = 0.05) {
+  for (const x of [x0, x1]) {
+    for (const z of [z0, z1]) {
+      for (let y = floorY; y < topY; y += step) {
+        for (const dx of [0, step]) {
+          for (const dz of [0, step]) grid.observe([x + dx, y, z + dz]);
+        }
+      }
+    }
+  }
+}
+
 test('an unobserved cell is neither walkable nor blocked', () => {
   const grid = new TraversalGrid({ minSlabVoxels: 1 });
   assert.equal(grid.isSeen(5, 5), false);
@@ -209,6 +228,7 @@ test('a neighbouring cell offers BOTH its floor and its tabletop as edges', () =
   for (let x = 0.3; x <= 0.7; x += 0.1) {
     for (let z = 0.3; z <= 0.7; z += 0.1) grid.observe([x, 0.72, z]);
   }
+  legs(grid, 0.35, 0.65, 0.35, 0.65, 0.72);
 
   const from = grid.nodeAtWorld([0.3, 0.1, 0.5]);
   const toCell = { cx: grid.cellX(0.5), cz: grid.cellZ(0.5) };
@@ -227,6 +247,7 @@ test('the floor route is cheaper than the furniture route', () => {
   for (let x = 0.3; x <= 0.7; x += 0.1) {
     for (let z = 0.3; z <= 0.7; z += 0.1) grid.observe([x, 0.72, z]);
   }
+  legs(grid, 0.35, 0.65, 0.35, 0.65, 0.72);
   const from = grid.nodeAtWorld([0.3, 0.1, 0.5]);
   const offered = grid.neighbors(from)
     .filter((n) => n.cx === grid.cellX(0.5) && n.cz === grid.cellZ(0.5));
@@ -306,6 +327,7 @@ function roomWithDeskAndNoise(options = {}) {
   for (let x = 1.2; x <= 1.8; x += 0.025) {
     for (let z = 0.2; z <= 0.8; z += 0.025) grid.observe([x, 0.90, z]);
   }
+  legs(grid, 1.25, 1.75, 0.25, 0.75, 0.90);
   // Reconstruction noise: one cell's worth of voxels floating in mid-air.
   for (const [dx, dz] of [[0, 0], [0.06, 0], [0, 0.06], [0.06, 0.06]]) {
     grid.observe([0.40 + dx, 0.85, 0.50 + dz]);
@@ -473,6 +495,7 @@ test('the furniture-reluctance costs are tunable, not baked in', () => {
     for (let x = 0.6; x <= 1.0; x += 0.05) {
       for (let z = 0; z <= 0.6; z += 0.05) g.observe([x, 0.50, z]);
     }
+    legs(g, 0.65, 0.95, 0.05, 0.55, 0.50);
   }
   const shelfOf = (g) => {
     const from = g.nodeAtWorld([0.3, 0.1, 0.3]);
@@ -500,4 +523,77 @@ test('the standable ceiling keeps furniture but rejects high floating clusters',
   assert.ok(heights(0.5).some((y) => y > 0.4), '의자 높이는 남아야 한다');
   assert.ok(heights(1.2).some((y) => y > 0.6), '책상 높이는 남아야 한다');
   assert.ok(!heights(1.8).some((y) => y > 0.9), '상한 위는 설 수 없어야 한다');
+});
+
+// ── a surface has to be held up by something ────────────────
+
+// Floor, a chair whose seat rests on legs thinner than one cell, and a sheet
+// of flying pixels at the same height with nothing under it at all.
+function roomWithChairAndSheet() {
+  const grid = new TraversalGrid({ minSlabVoxels: 1 });
+  for (let x = 0; x <= 3.0; x += 0.05) {
+    for (let z = 0; z <= 1.0; z += 0.05) grid.observe([x, 0.02, z]);
+  }
+  // Seat: 40x40cm at 44cm, on four 5cm legs at its corners.
+  for (let x = 0.6; x <= 1.0; x += 0.05) {
+    for (let z = 0.3; z <= 0.7; z += 0.05) grid.observe([x, 0.44, z]);
+  }
+  for (const x of [0.65, 0.95]) {
+    for (const z of [0.35, 0.65]) {
+      for (let y = 0.05; y < 0.44; y += 0.05) grid.observe([x, y, z]);
+    }
+  }
+  // Flying pixels along an edge: just as wide as the seat, resting on nothing.
+  for (let x = 2.0; x <= 2.4; x += 0.05) {
+    for (let z = 0.3; z <= 0.7; z += 0.05) grid.observe([x, 0.44, z]);
+  }
+  return grid;
+}
+
+test('a seat on legs thinner than a cell still counts as supported', () => {
+  const grid = roomWithChairAndSheet();
+  const seat = grid.nodeAtWorld([0.8, 0.5, 0.5]);
+  assert.ok(seat, 'the seat should be standable geometry');
+  assert.ok(grid.hasSupportColumn(seat.cx, seat.cz, grid.levelY(seat.cx, seat.cz, seat.level)),
+    '다리가 이웃 칸에 있어도 지지로 인정돼야 한다');
+});
+
+test('the ground alone is not support — a plate over the floor is rejected', () => {
+  const grid = roomWithChairAndSheet();
+  const sheetY = grid.levels(grid.cellX(2.2), grid.cellZ(0.5)).find((y) => y > 0.3);
+  assert.ok(sheetY, 'the sheet exists as geometry — that is the point');
+  assert.ok(!grid.hasSupportColumn(grid.cellX(2.2), grid.cellZ(0.5), sheetY));
+});
+
+test('the unsupported sheet is not reachable, the seat is', () => {
+  const grid = roomWithChairAndSheet();
+  const reachable = reachableFrom(grid, grid.nodeAtWorld([0.1, 0.1, 0.5]));
+  const seat = grid.nodeAtWorld([0.8, 0.5, 0.5]);
+  assert.ok(reachable.has(nodeKey(seat.cx, seat.cz, seat.level)), '의자에는 올라갈 수 있어야 한다');
+  const sheetCx = grid.cellX(2.2);
+  const sheetCz = grid.cellZ(0.5);
+  const levels = grid.levels(sheetCx, sheetCz);
+  const sheetLevel = levels.findIndex((y) => y > 0.3);
+  assert.ok(!reachable.has(nodeKey(sheetCx, sheetCz, sheetLevel)), '공중 발판에는 갈 수 없어야 한다');
+});
+
+test('the floor is exempt — nothing is ever observed below it', () => {
+  const grid = new TraversalGrid({ minSlabVoxels: 1 });
+  floorPatch(grid, 0, 1.0, 0, 1.0);
+  const node = grid.nodeAtWorld([0.5, 0.1, 0.5]);
+  assert.ok(grid.hasSupportColumn(node.cx, node.cz, grid.levelY(node.cx, node.cz, node.level)));
+  assert.ok(grid.isWalkable(node.cx, node.cz));
+});
+
+test('the check runs on every edge, not only on climbs', () => {
+  // Measured on five room scans: gating it on rise stopped zero floaters,
+  // because every one of them was entered sideways or by dropping in.
+  const grid = roomWithChairAndSheet();
+  const sheetCx = grid.cellX(2.2);
+  const sheetCz = grid.cellZ(0.5);
+  const sheetLevel = grid.levels(sheetCx, sheetCz).findIndex((y) => y > 0.3);
+  // Stand on the sheet's neighbour at the same height and try to step across.
+  const from = { cx: grid.cellX(2.05), cz: sheetCz, level: sheetLevel };
+  const across = grid.neighbors(from).filter((n) => n.cx === sheetCx && n.cz === sheetCz);
+  assert.equal(across.length, 0, '옆으로도 들어갈 수 없어야 한다');
 });

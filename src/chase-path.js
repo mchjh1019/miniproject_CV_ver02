@@ -113,19 +113,44 @@ export function chooseFleeTarget(grid, {
   recentWindowMs = 15000,
   heading = null,
   minDistance = 1.5,
+  // The furniture-only pass uses this instead. minDistance exists to stop
+  // Hachuping dithering between adjacent cells; applied to a forced climb it
+  // would instead veto the one chair in the room for being too close.
+  raisedMinDistance = 0.8,
   maxDistance = 6.0,
   random = Math.random,
   sampleLimit = 4000,
   reachable = null,
-  // Score adjustment for a destination that is not on the ground. Measured on
-  // five room scans: moving this knob barely changed the outcome, because the
-  // grid's height toll dominates. Left where it was.
-  raisedTargetScore = -1.2,
+  // Score adjustment for a destination that is not on the ground.
+  //
+  // Zero, i.e. furniture is neither preferred nor discouraged HERE. The
+  // restraint lives in the grid instead, where climbing costs 2.0/m and every
+  // step above the floor is taxed — that is what stops the aerial-highway bug
+  // (touring the room at tabletop height), and it keeps working whatever this
+  // is. Measured over five room scans, 2 minutes x 6 seeds each, counting
+  // climbs above 55cm per run: -1.2 gave 1.2, zero gives 3.7, +0.5 gives 6.2
+  // at the price of 21% of the round spent off the ground. Zero is where
+  // furniture gets used without the room turning into a climbing frame.
+  raisedTargetScore = 0,
+  // How far above the floor a destination has to be to count as furniture.
+  raisedThresholdM = 0.25,
+  // Consider ONLY furniture this round. The scores above are a tug of war the
+  // ground usually wins, so hoping furniture turns up often enough is not a
+  // plan: a player filming for two minutes needs to SEE it happen. The runner
+  // sets this when Hachuping has spent too long on the floor, which turns
+  // "sometimes, eventually" into a rate. Falls back to the whole map when the
+  // room has no reachable furniture, so a bare room still works.
+  preferRaised = false,
 } = {}) {
   if (!from) return null;
   const fromWorld = grid.worldOf(from);
   if (!fromWorld) return null;
 
+  const floorSlab = grid.resolveFloorSlab();
+  const floorY = floorSlab === null ? null : grid.slabTopY(floorSlab);
+
+  const scan = (furnitureOnly) => {
+  const minTravel = furnitureOnly ? Math.min(minDistance, raisedMinDistance) : minDistance;
   let best = null;
   let bestScore = -Infinity;
   let sampled = 0;
@@ -143,7 +168,7 @@ export function chooseFleeTarget(grid, {
       if (!world) continue;
 
       const travel = Math.hypot(world[0] - fromWorld[0], world[2] - fromWorld[2]);
-      if (travel < minDistance) continue;
+      if (travel < minTravel) continue;
 
       let score = 0;
 
@@ -177,7 +202,14 @@ export function chooseFleeTarget(grid, {
 
       // Ground is where a small creature believably runs; furniture is the
       // exception. The old +0.8 bonus here kept Hachuping touring tabletops.
-      if (level > 0) score += raisedTargetScore;
+      //
+      // Height above the floor, not level > 0: in a cell where the depth
+      // camera never saw the floor under the desk, the desktop IS level 0,
+      // so the level index called the most obvious piece of furniture in the
+      // room "ground".
+      const raised = floorY !== null && world[1] - floorY > raisedThresholdM;
+      if (furnitureOnly && !raised) continue;
+      if (raised) score += raisedTargetScore;
 
       score += random() * 1.2;
 
@@ -189,6 +221,16 @@ export function chooseFleeTarget(grid, {
   }
 
   return best;
+  };
+
+  // Furniture first when the runner asks for it, but never at the price of
+  // having no destination at all: an empty room, or one whose furniture is
+  // all unreachable, must still get a normal pick or Hachuping stops moving.
+  if (preferRaised) {
+    const raisedBest = scan(true);
+    if (raisedBest) return raisedBest;
+  }
+  return scan(false);
 }
 
 // Trim visit records that have aged out, so the map cannot grow forever.

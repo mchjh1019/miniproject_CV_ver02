@@ -103,6 +103,11 @@ export const CHASE_MAX_STAND_ABOVE_FLOOR_M = 0.85;
 // started. 80 cells (~3.2 m2 at 0.2 m) still rejects a genuinely bare map while
 // letting a properly-walked room begin. See tests/chase-start-gate.test.mjs.
 export const CHASE_MIN_WALKABLE_CELLS = 80;
+// How long Hachuping may stay at ground level before its next destination is
+// forced to be furniture. A round is only filmed for a minute or two, so the
+// climb has to be something the player is guaranteed to see, not something
+// that averages out over ten minutes.
+export const CHASE_RAISED_INTERVAL_MS = 15000;
 export const CHASE_RETARGET_MS = 3000;
 export const CHASE_STUCK_MS = 4000;
 export const CHASE_RECENT_WINDOW_MS = 15000; // how long a visited cell stays penalised

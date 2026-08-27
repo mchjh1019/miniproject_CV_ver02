@@ -116,3 +116,81 @@ test('no target when there is nowhere to stand', () => {
   const grid = new TraversalGrid({ minSlabVoxels: 1 });
   assert.equal(chooseFleeTarget(grid, { from: null }), null);
 });
+
+// ── going to stand on something, on purpose ─────────────────
+
+// A long floor with one supported desk at the far end.
+function roomWithOneDesk() {
+  const grid = new TraversalGrid({ minSlabVoxels: 1 });
+  for (let x = 0; x <= 4.0; x += 0.05) {
+    for (let z = 0; z <= 1.0; z += 0.05) grid.observe([x, 0.02, z]);
+  }
+  for (let x = 3.0; x <= 3.6; x += 0.05) {
+    for (let z = 0.2; z <= 0.8; z += 0.05) grid.observe([x, 0.70, z]);
+  }
+  for (const x of [3.05, 3.55]) {
+    for (const z of [0.25, 0.75]) {
+      for (let y = 0.05; y < 0.70; y += 0.05) grid.observe([x, y, z]);
+    }
+  }
+  return grid;
+}
+
+const heightAbove = (grid, target) => {
+  const floor = grid.slabTopY(grid.resolveFloorSlab());
+  return grid.worldOf(target)[1] - floor;
+};
+
+test('preferRaised picks the desk instead of open floor', () => {
+  const grid = roomWithOneDesk();
+  const from = grid.nodeAtWorld([0.2, 0.1, 0.5]);
+  const target = chooseFleeTarget(grid, { from, preferRaised: true, random: () => 0.5 });
+  assert.ok(target, 'a destination must still be returned');
+  assert.ok(heightAbove(grid, target) > 0.25, '가구를 골라야 한다');
+});
+
+test('without it the same room usually sends Hachuping along the floor', () => {
+  const grid = roomWithOneDesk();
+  const from = grid.nodeAtWorld([0.2, 0.1, 0.5]);
+  const target = chooseFleeTarget(grid, { from, random: () => 0.5 });
+  assert.ok(target);
+  assert.ok(heightAbove(grid, target) <= 0.25, '평소에는 바닥이 기본이어야 한다');
+});
+
+test('a room with no furniture still yields a destination', () => {
+  // The fallback matters more than it looks: without it Hachuping stops dead
+  // in any room whose furniture is unreachable, which includes every bare one.
+  const grid = new TraversalGrid({ minSlabVoxels: 1 });
+  for (let x = 0; x <= 4.0; x += 0.05) {
+    for (let z = 0; z <= 1.0; z += 0.05) grid.observe([x, 0.02, z]);
+  }
+  const from = grid.nodeAtWorld([0.2, 0.1, 0.5]);
+  assert.ok(chooseFleeTarget(grid, { from, preferRaised: true, random: () => 0.5 }));
+});
+
+test('a nearby chair is not vetoed for being close', () => {
+  // minDistance stops dithering between adjacent cells; applied to a forced
+  // climb it would rule out the only piece of furniture in a small room.
+  const grid = roomWithOneDesk();
+  const from = grid.nodeAtWorld([2.5, 0.1, 0.5]); // ~0.9m from the desk
+  const target = chooseFleeTarget(grid, {
+    from, preferRaised: true, minDistance: 1.5, random: () => 0.5,
+  });
+  assert.ok(target && heightAbove(grid, target) > 0.25, '가까워도 골라야 한다');
+});
+
+test('furniture is scored level with the ground, not against it', () => {
+  // The restraint lives in the grid's climb cost, not here. A negative score
+  // here is what made furniture something Hachuping reached by accident.
+  const grid = roomWithOneDesk();
+  const from = grid.nodeAtWorld([0.2, 0.1, 0.5]);
+  const desk = chooseFleeTarget(grid, {
+    from, preferRaised: true, raisedTargetScore: 0, random: () => 0.5,
+  });
+  const punished = chooseFleeTarget(grid, {
+    from, preferRaised: true, raisedTargetScore: -50, random: () => 0.5,
+  });
+  // Even a huge penalty cannot change the furniture-only pass's winner, which
+  // is the point of the pass; the knob only matters in the normal pass.
+  assert.deepEqual(punished, desk);
+});

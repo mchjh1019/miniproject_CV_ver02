@@ -105,13 +105,19 @@ test('it does not sit in one corner — it covers ground', () => {
 });
 
 // Floor on the left, a 40cm ledge on the right. The only way across is up.
+//
+// The ledge is a SOLID block, not a bare top plane. A 2m plateau with nothing
+// under it is geometrically a sheet of flying pixels, and hasSupportColumn is
+// entitled to reject it; a real step, kerb or bed has a body.
 function floorAndLedge() {
   const grid = new TraversalGrid({ minSlabVoxels: 1 });
   for (let x = 0; x <= 1.3; x += 0.1) {
     for (let z = 0; z <= 1.3; z += 0.1) grid.observe([x, 0.02, z]);
   }
   for (let x = 1.5; x <= 3.5; x += 0.1) {
-    for (let z = 0; z <= 1.3; z += 0.1) grid.observe([x, 0.42, z]);
+    for (let z = 0; z <= 1.3; z += 0.1) {
+      for (let y = 0.02; y <= 0.42; y += 0.05) grid.observe([x, y, z]);
+    }
   }
   return grid;
 }
@@ -525,4 +531,35 @@ test('approaching a target on furniture drives it back to the ground', () => {
     runner.update(1 / 60, { playerPosition: [1.7, 0.1, 0.5], now });
   }
   assert.ok(runner.position[1] < 0.4, 'it should have come down within 30s');
+});
+
+test('it goes and stands on furniture within the interval, every time', () => {
+  // A two-minute recording that never shows a climb reads as "it cannot
+  // climb", so the rate has to be a floor, not an average over ten minutes.
+  const grid = new TraversalGrid({ minSlabVoxels: 1 });
+  for (let x = 0; x <= 4.0; x += 0.05) {
+    for (let z = 0; z <= 1.0; z += 0.05) grid.observe([x, 0.02, z]);
+  }
+  for (let x = 3.0; x <= 3.6; x += 0.05) {
+    for (let z = 0.2; z <= 0.8; z += 0.05) grid.observe([x, 0.70, z]);
+  }
+  for (const x of [3.05, 3.55]) {
+    for (const z of [0.25, 0.75]) {
+      for (let y = 0.05; y < 0.70; y += 0.05) grid.observe([x, y, z]);
+    }
+  }
+  const floor = grid.slabTopY(grid.resolveFloorSlab());
+  const runner = new ChaseRunner({ grid, random: () => 0.5, raisedIntervalMs: 15000 });
+  runner.start([0.2, 0.1, 0.5], 0);
+
+  let climbs = 0;
+  let up = false;
+  let now = 0;
+  for (let i = 0; i < 60 * 120; i += 1) {
+    now += 1000 / 60;
+    runner.update(1 / 60, { playerPosition: [0.1, 1.5, 0.5], now });
+    const height = runner.position[1] - floor;
+    if (!up && height > 0.25) { up = true; climbs += 1; } else if (up && height < 0.2) up = false;
+  }
+  assert.ok(climbs >= 2, `2분 동안 ${climbs}번만 올라감`);
 });

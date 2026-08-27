@@ -82,6 +82,14 @@ export class ChaseRunner {
     // be, and how much Hachuping likes furniture. Kept as one bag so tuning
     // does not need a new constructor argument each time.
     fleeOptions = null,
+    // Go and stand on something after this long at ground level. See
+    // chooseFleeTarget's preferRaised for why this is a timer and not a score.
+    // 15s measured out at ~4 climbs above 55cm per 2-minute round, against 3.7
+    // from the scoring alone: the timer is what makes the rate a floor rather
+    // than an average, which is the point — a two-minute recording that never
+    // shows a climb reads as "it cannot climb".
+    raisedIntervalMs = 15000,
+    raisedThresholdM = 0.25,
     onEvent = null,
   } = {}) {
     this.grid = grid;
@@ -99,6 +107,8 @@ export class ChaseRunner {
     this.escapeAfterFailures = escapeAfterFailures;
     this.escapeMinSpeed = escapeMinSpeed;
     this.fleeOptions = fleeOptions;
+    this.raisedIntervalMs = raisedIntervalMs;
+    this.raisedThresholdM = raisedThresholdM;
     this.onEvent = onEvent;
     this.reset();
   }
@@ -133,6 +143,7 @@ export class ChaseRunner {
     this.frozen = false;
     this.replanFailures = 0;
     this.reachable = null;
+    this.lastRaisedAt = -Infinity;
   }
 
   getReachable() {
@@ -151,6 +162,7 @@ export class ChaseRunner {
     this.lastRetargetAt = now;
     this.targetSetAt = now;
     this.lastProgressAt = now;
+    this.lastRaisedAt = now;
     this.markVisited(node, now);
     this.emit('start');
     return true;
@@ -371,6 +383,15 @@ export class ChaseRunner {
   // Pick a new destination when the current one is reached, has gone stale, or
   // could not be reached in time.
   ensurePath(playerPosition, now) {
+    // Every frame, not only the ones that retarget: a climb that happens and
+    // ends between two retargets still counts as having been on furniture.
+    const floorSlab = this.grid.resolveFloorSlab();
+    if (floorSlab !== null
+      && this.position[1] - this.grid.slabTopY(floorSlab) > this.raisedThresholdM) {
+      this.lastRaisedAt = now;
+    }
+    const overdueForFurniture = now - this.lastRaisedAt > this.raisedIntervalMs;
+
     const pathDone = !this.path.length || this.pathIndex >= this.path.length;
     // "Stuck" means no forward progress, not merely an old target. Measured on
     // five room scans: the old wall-clock rule abandoned 84% of furniture
@@ -395,6 +416,7 @@ export class ChaseRunner {
     const timerDue = now - this.lastRetargetAt > this.retargetMs;
     if (!(pathDone || stuck || (timerDue && compromised))) return;
 
+
     // Recomputed per retarget rather than per frame: the map grows while the
     // chase runs, so yesterday's flood would miss newly scanned ground.
     this.reachable = reachableFrom(this.grid, this.node);
@@ -409,6 +431,7 @@ export class ChaseRunner {
       heading: this.heading,
       random: this.random,
       reachable: this.reachable,
+      preferRaised: overdueForFurniture,
     });
     this.lastRetargetAt = now;
     if (!target) {

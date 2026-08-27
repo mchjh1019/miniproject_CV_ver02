@@ -70,6 +70,19 @@ export class TraversalGrid {
     raisedSupportAboveFloorM = 0.4,
     minRaisedSupport = 2,
     raisedSupportBandM = 0.10,
+    // ... and something has to be holding it up. A real surface has furniture
+    // under it; a reconstruction floater has nothing but air. Depth searched
+    // below the surface, and how far sideways the column may lean.
+    //
+    // The radius is what makes this safe. Measured on five room scans, a
+    // strictly-vertical test (radius 0) deleted 51-72 reachable cells each,
+    // most of them real chair seats: a seat is a thin plate on legs thinner
+    // than one 20cm cell, so the cell holding the seat often has nothing
+    // directly beneath it. Allowing the support to sit in any of the eight
+    // neighbouring columns drops that to 1-8 cells per scan, and those are
+    // the floaters — chair and desk tops survive intact.
+    supportDepthM = 0.40,
+    supportRadiusCells = 1,
     // How reluctant Hachuping is to use furniture. These were tuned when the
     // penalties were the ONLY defence against the aerial-highway bug (touring
     // the room at tabletop height without ever landing). hasRaisedSupport now
@@ -101,6 +114,8 @@ export class TraversalGrid {
     this.raisedSupportAboveFloorM = raisedSupportAboveFloorM;
     this.minRaisedSupport = minRaisedSupport;
     this.raisedSupportBandM = raisedSupportBandM;
+    this.supportSlabs = Math.max(1, Math.round(supportDepthM / slabHeight));
+    this.supportRadiusCells = Math.max(0, Math.floor(supportRadiusCells));
     this.climbCostPerM = climbCostPerM;
     this.dropCostPerM = dropCostPerM;
     this.jumpBaseCost = jumpBaseCost;
@@ -501,6 +516,45 @@ export class TraversalGrid {
     return false;
   }
 
+  // Is anything holding this surface up?
+  //
+  // hasRaisedSupport asks whether the surface is WIDE (neighbours at the same
+  // height); this asks whether it is SUPPORTED (mass underneath). They fail on
+  // different artefacts: a flat sheet of flying pixels along a desk edge is
+  // wide but rests on nothing, and passes the first test while failing this one.
+  //
+  // Same reason as hasRaisedSupport for living on the edge layer rather than
+  // in levels(): it reads the neighbours' occupancy, and levels() caches per
+  // cell with no way to invalidate a neighbour's entry when this one changes.
+  hasSupportColumn(cx, cz, y) {
+    const floorSlab = this.resolveFloorSlab();
+    if (floorSlab === null) return true;
+    // Ground level holds itself up: nothing is ever observed below the floor,
+    // so the floor would fail its own test.
+    if (y - this.slabTopY(floorSlab) <= this.maxStepUp) return true;
+
+    const slab = this.slabOf(y - this.slabHeight / 2);
+    const r = this.supportRadiusCells;
+    for (let dz = -r; dz <= r; dz += 1) {
+      for (let dx = -r; dx <= r; dx += 1) {
+        const cell = this.getCell(cx + dx, cz + dz);
+        if (!cell) continue;
+        for (let d = 1; d <= this.supportSlabs; d += 1) {
+          const below = slab - d;
+          // The ground does not count. A surface 40cm up whose only support is
+          // the floor beneath it is a plate hovering over the floor, which is
+          // the artefact this rejects; a real object has continuous mass down
+          // to whatever it stands on. Measured on five room scans, ignoring
+          // the floor caught 29 more low floaters and cost nothing at chair or
+          // desk height, where the floor is out of range anyway.
+          if (below <= floorSlab) break;
+          if (this.hasSlab(cell, below)) return true;
+        }
+      }
+    }
+    return false;
+  }
+
   // A cell that was observed but offers nowhere to stand — a wall, or the
   // solid body of a piece of furniture.
   isBlocked(cx, cz) {
@@ -589,6 +643,15 @@ export class TraversalGrid {
           // still allowed, or a character could get stranded on it forever.
           if (rise > this.maxStepUp
             && !this.hasRaisedSupport(nx, nz, levels[level])) continue;
+          // Nor is a surface with nothing underneath it, at any height. This
+          // one is NOT climb-only. Measured on five room scans: gating it on
+          // rise stopped exactly zero floaters, because none of them are
+          // entered by climbing — a character reaches them by stepping
+          // sideways off a neighbouring floater or by dropping onto one from
+          // the furniture above. Testing every edge costs nothing in stranding
+          // risk, since the test applies to where an edge GOES: standing on a
+          // floater, the supported floor below is still an edge out.
+          if (!this.hasSupportColumn(nx, nz, levels[level])) continue;
 
           const jump = Math.abs(rise) > this.maxStepUp;
           // Climbing is charged double its height, dropping half: coming down

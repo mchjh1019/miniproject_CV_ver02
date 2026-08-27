@@ -60,6 +60,7 @@ import {
   CHASE_MAX_STEP_UP_M,
   CHASE_MIN_WALKABLE_CELLS,
   CHASE_RECENT_WINDOW_MS,
+  CHASE_RAISED_INTERVAL_MS,
   CHASE_RETARGET_MS,
   CHASE_SLAB_HEIGHT_M,
   CHASE_STUCK_MS,
@@ -314,6 +315,7 @@ async function init() {
       chaseRunner = new ChaseRunner({
         grid: chaseGrid,
         retargetMs: CHASE_RETARGET_MS,
+        raisedIntervalMs: CHASE_RAISED_INTERVAL_MS,
         stuckMs: CHASE_STUCK_MS,
         recentWindowMs: CHASE_RECENT_WINDOW_MS,
         onEvent: (type, detail) => chaseLog.push(performance.now(), type, detail),
